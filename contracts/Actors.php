@@ -9,19 +9,20 @@ use Crab\Engine\Async\Cancellation;
 /**
  * Sends messages to actors. An actor is a class with
  * handle(Inbox $inbox, string $key), of which one runs for each key at a
- * time, taking its messages one by one, in the order they were sent:
+ * time, taking its messages one by one, in order per sending process:
  *
  *     $actors->tell(Assistant::class, "user:{$id}", ['text' => 'hi']);
  *     $answer = $actors->ask(Assistant::class, "user:{$id}", ['text' => 'hi']);
  *
- * It is started by its first message and stops once its inbox has been
+ * It is started by its first message and its inbox ends after waiting
  * empty for "actors.idle" seconds. Messages travel as JSON, and each is
  * delivered at most once.
  */
 interface Actors
 {
     /**
-     * Sends a message and returns at once.
+     * Sends a message without waiting for the actor to handle it. With a
+     * remote carrier, waits for publication and throws if it fails.
      *
      * @param class-string $actor
      */
