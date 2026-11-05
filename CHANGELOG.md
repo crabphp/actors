@@ -4,6 +4,7 @@ Crab Actors follows [semantic versioning](https://semver.org). Before 1.0, a min
 
 ## Unreleased
 
+- **Invalid sends fail before they start work:** an actor must have a public `handle()` taking the inbox and a string key. An ask refuses a negative or non-finite timeout before creating a wait or subscription.
 - **Replying to a tell does nothing:** `Message::reply()` no longer serializes a reply nobody is waiting for or rejects a second call for a message sent with `tell()`.
 
 ## 0.1.0 — 2026-11-05

@@ -198,6 +198,38 @@ final class ActorsTest extends TestCase
         $actors->tell(Echoes::class, 'k', ['bytes' => "\xff"]);
     }
 
+    public function testAnActorMustRequireAnInboxAndStringKey(): void
+    {
+        $actors = new Actors();
+        foreach ([MissingKey::class, WrongKey::class, PrivateHandle::class] as $actor) {
+            $failure = null;
+            try {
+                $actors->ask($actor, 'k', null);
+            } catch (\InvalidArgumentException $error) {
+                $failure = $error;
+            }
+            self::assertInstanceOf(\InvalidArgumentException::class, $failure, "{$actor} was accepted.");
+            self::assertStringContainsString('must', $failure->getMessage());
+        }
+        $actors->stop();
+    }
+
+    public function testAnAskRejectsAnInvalidTimeoutBeforeSending(): void
+    {
+        $actors = new Actors();
+        foreach ([-1.0, INF, NAN] as $timeout) {
+            $failure = null;
+            try {
+                $actors->ask(Counter::class, 'k', null, timeout: $timeout);
+            } catch (\InvalidArgumentException $error) {
+                $failure = $error;
+            }
+            self::assertInstanceOf(\InvalidArgumentException::class, $failure);
+        }
+        self::assertSame(0, $actors->count());
+        $actors->stop();
+    }
+
     public function testAnIdleActorEndsAndItsNextMessageStartsItAfresh(): void
     {
         $actors = new Actors(idle: 0.05);
@@ -407,6 +439,21 @@ final class Echoes
             $message->reply($message->data);
         }
     }
+}
+
+final class MissingKey
+{
+    public function handle(Inbox $inbox): void {}
+}
+
+final class WrongKey
+{
+    public function handle(Inbox $inbox, int $key): void {}
+}
+
+final class PrivateHandle
+{
+    private function handle(Inbox $inbox, string $key): void {}
 }
 
 final class Forwarder

@@ -131,11 +131,14 @@ final class Actors implements ActorsContract
         ?Cancellation $cancellation = null,
     ): mixed {
         $this->check($actor, $key);
-        $data = self::plain($message);
         $cancellation?->throwIfCancelled();
+        if (!is_finite($timeout) || $timeout < 0) {
+            throw new \InvalidArgumentException('An actor ask needs a finite, nonnegative timeout.');
+        }
+        $data = self::plain($message);
         $loop = EventLoop::current();
         // One deadline for all of it: waiting for the reply channel counts against the timeout too.
-        $deadline = microtime(true) + $timeout;
+        $deadline = self::now() + $timeout;
         $id = bin2hex(random_bytes(8));
         $outgoing = null;
         if ($this->remote($actor, $key)) {
@@ -153,7 +156,7 @@ final class Actors implements ActorsContract
                         "{$actor} for \"{$key}\" did not reply within {$timeout} seconds: the reply channel was not ready.",
                     ),
                 );
-                $timeout = max(0.0, $deadline - microtime(true));
+                $timeout = max(0.0, $deadline - self::now());
             }
             // Settled once, by the reply, the timeout or the cancellation; a reply may come while it is still being sent.
             return Async::await(
@@ -567,12 +570,25 @@ final class Actors implements ActorsContract
 
     private static function signature(string $actor): ?string
     {
-        $parameters = new \ReflectionMethod($actor, 'handle')->getParameters();
+        $method = new \ReflectionMethod($actor, 'handle');
+        if (!$method->isPublic()) {
+            return "{$actor} cannot be an actor: its handle() must be public.";
+        }
+        $parameters = $method->getParameters();
         $first = $parameters[0] ?? null;
-        $type = $first?->getType();
-        if (!$type instanceof \ReflectionNamedType || $type->getName() !== Inbox::class) {
+        $second = $parameters[1] ?? null;
+        $firstType = $first?->getType();
+        $secondType = $second?->getType();
+        if (
+            !$firstType instanceof \ReflectionNamedType
+            || $firstType->getName() !== Inbox::class
+            || !$secondType instanceof \ReflectionNamedType
+            || $secondType->getName() !== 'string'
+        ) {
             return (
-                "{$actor} cannot be an actor: its handle() must take an " . Inbox::class . ' first, and the key second.'
+                "{$actor} cannot be an actor: its handle() must take an "
+                . Inbox::class
+                . ' first, and a string key second.'
             );
         }
         foreach (array_slice($parameters, 2) as $parameter) {
@@ -606,5 +622,9 @@ final class Actors implements ActorsContract
         } else {
             FailureReporter::report(strtoupper($level) . ' ' . $message, $error);
         }
+    }
+    private static function now(): float
+    {
+        return hrtime(true) / 1_000_000_000;
     }
 }

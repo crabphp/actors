@@ -31,6 +31,8 @@ interface Actors
      * Sends a message and waits for the actor's reply to it.
      *
      * @param class-string $actor
+     * @param float $timeout Finite, nonnegative seconds, including waiting for the reply channel and publication.
+     * @throws \InvalidArgumentException When the actor, message or timeout is invalid.
      * @throws NoReply When none came within $timeout seconds, or the actor ended or failed before it replied.
      * @throws \Crab\Engine\Async\CancelledException When $cancellation was cancelled first.
      */
