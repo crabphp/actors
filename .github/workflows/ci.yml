@@ -16,6 +16,10 @@ jobs:
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        framework: [v0.6.0, v0.6.1, main]
     defaults:
       run:
         working-directory: actors
@@ -23,10 +27,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: actors
-      # Tested against the framework's main, which composer.json reads from ../framework; a release requires ^0.6 of it.
+      # Keep the sibling path repository and test both supported releases and the next framework changes.
       - uses: actions/checkout@v4
         with:
           repository: crabphp/framework
+          ref: ${{ matrix.framework }}
           path: framework
       - uses: shivammathur/setup-php@v2
         with:
@@ -34,6 +39,7 @@ jobs:
           extensions: mbstring, pcntl, posix, sockets, pdo_sqlite
           coverage: none
       - run: composer install --no-interaction --no-progress
+      - run: composer validate --strict
       - run: composer format:check
       - run: composer lint
-      - run: vendor/bin/phpunit
+      - run: composer test

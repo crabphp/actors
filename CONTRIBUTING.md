@@ -5,5 +5,5 @@ Setup, tests, formatting, linting and conventions are the same as the framework'
 ```sh
 composer format:check
 composer lint
-vendor/bin/phpunit
+composer test
 ```
