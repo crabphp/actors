@@ -63,6 +63,81 @@ final class ActorsTest extends TestCase
         $actors->stop();
     }
 
+    public function testStoppingWhileTheReplyChannelIsMadeRefusesTheAsk(): void
+    {
+        $loop = EventLoop::current();
+        $carrier = new SlowSubscribingCarrier();
+        $actors = new Actors(carrier: $carrier);
+        $asked = Task::spawn($loop, static function () use ($actors): string {
+            try {
+                $actors->ask(Counter::class, 'k', 'add', timeout: 10.0);
+                return 'answered';
+            } catch (NoReply $error) {
+                return $error->getMessage();
+            }
+        });
+        try {
+            $this->waitUntil('reply channel subscription', static fn(): bool => $carrier->finish !== null);
+            $actors->stop();
+            self::assertStringContainsString('stopping', $asked->await());
+        } finally {
+            $carrier->finish?->__invoke();
+            $actors->stop();
+        }
+        $this->waitUntil('late reply subscription completion', static fn(): bool => $carrier->finished);
+        self::assertSame([], $carrier->channels, 'Stopping leaked a subscription that completed later.');
+    }
+
+    public function testStoppingLeavesItsReplyChannelAndKeepsOtherCarrierSubscribers(): void
+    {
+        $carrier = new SharedCarrier();
+        $carrier->subscribe('broadcast', static function (): void {}, static function (): void {});
+        $actors = new Actors(carrier: $carrier);
+        try {
+            $actors->ask(Counter::class, 'remote', 'ignored', timeout: 0.01);
+        } catch (NoReply) {
+        } finally {
+            $actors->stop();
+        }
+
+        self::assertSame(['broadcast'], $carrier->channels());
+    }
+
+    public function testStoppingWithdrawsATellWaitingBehindAPublication(): void
+    {
+        $carrier = new SlowPublishingCarrier();
+        $actors = new Actors(carrier: $carrier);
+        $loop = EventLoop::current();
+        $first = Task::spawn($loop, static fn() => $actors->tell(Counter::class, 'remote', 'first'));
+        $this->waitUntil('first publication', static fn(): bool => $carrier->held !== []);
+        $second = Task::spawn($loop, static function () use ($actors): string {
+            try {
+                $actors->tell(Counter::class, 'remote', 'second');
+                return 'published';
+            } catch (NoReply $error) {
+                return $error->getMessage();
+            }
+        });
+        try {
+            Async::sleep($loop, 0.0);
+            $actors->stop();
+            Async::sleep($loop, 0.0);
+            self::assertTrue($second->isComplete(), 'A queued tell kept waiting after shutdown.');
+            self::assertStringContainsString('stopping', $second->result());
+        } finally {
+            $carrier->held[0]();
+            $actors->stop();
+            Async::sleep($loop, 0.0);
+            // A broken implementation may have started the second publication.
+            foreach (array_slice($carrier->held, 1) as $finish) {
+                $finish();
+            }
+            $first->await();
+            $second->await();
+        }
+        self::assertCount(1, $carrier->sent, 'A queued message was published after shutdown.');
+    }
+
     public function testAnAskKeepsToItsTimeoutAndCancellationWhileItsMessageIsPublished(): void
     {
         $loop = EventLoop::current();
@@ -230,6 +305,38 @@ final class ActorsTest extends TestCase
         $actors->stop();
     }
 
+    public function testStoppingRefusesPendingRemoteAsksAndLogsLaterMessages(): void
+    {
+        $failed = new \ArrayObject();
+        $carrier = new SlowPublishingCarrier(hold: false);
+        $actors = new Actors(carrier: $carrier, logger: new class($failed) extends \Psr\Log\AbstractLogger {
+            public function __construct(
+                private \ArrayObject $failed,
+            ) {}
+
+            public function log($level, string|\Stringable $message, array $context = []): void
+            {
+                $this->failed[] = "{$level}: {$message}";
+            }
+        });
+        $loop = EventLoop::current();
+        $asked = Task::spawn($loop, static function () use ($actors): string {
+            try {
+                $actors->ask(Counter::class, 'remote', 'add', timeout: 1.0);
+                return 'answered';
+            } catch (NoReply $error) {
+                return $error->getMessage();
+            }
+        });
+        $this->waitUntil('remote ask publication', static fn(): bool => $carrier->sent !== []);
+
+        $actors->stop();
+        self::assertStringContainsString('stopping', $asked->await());
+        $actors->tell(Counter::class, 'remote', 'later');
+        self::assertCount(1, $carrier->sent);
+        self::assertStringContainsString('stopping', $failed[0]);
+    }
+
     public function testAnIdleActorEndsAndItsNextMessageStartsItAfresh(): void
     {
         $actors = new Actors(idle: 0.05);
@@ -313,7 +420,9 @@ final class ActorsTest extends TestCase
 
     public function testStoppingEndsTheActorsAndCancelsWhatTheyWaitOn(): void
     {
-        $actors = new Actors();
+        $actors = new Actors(logger: new class extends \Psr\Log\AbstractLogger {
+            public function log($level, string|\Stringable $message, array $context = []): void {}
+        });
         $loop = EventLoop::current();
         $asked = Task::spawn($loop, static fn() => $actors->ask(Counter::class, 'a', 'wait'));
         Async::sleep($loop, 0.01);
@@ -390,6 +499,15 @@ final class ActorsTest extends TestCase
         $this->expectException(\LogicException::class);
         $this->expectExceptionMessage('broadcast.carrier to redis');
         new Actors()->serve([0], new Cancellation());
+    }
+
+    private function waitUntil(string $what, \Closure $ready): void
+    {
+        $deadline = (hrtime(true) / 1e9) + 2.0;
+        while (!$ready()) {
+            self::assertLessThan($deadline, hrtime(true) / 1e9, "Waiting for {$what}.");
+            Async::sleep(EventLoop::current(), 0.001);
+        }
     }
 }
 
@@ -479,6 +597,11 @@ final class NotAnActor
 final class SlowSubscribingCarrier implements Carrier
 {
     public ?\Closure $finish = null;
+    public bool $finished = false;
+    /**
+     * @var array<string, true>
+     */
+    public array $channels = [];
 
     public function publish(array $channels, string $message): void {}
 
@@ -488,9 +611,14 @@ final class SlowSubscribingCarrier implements Carrier
             $this->finish = $resume;
             return null;
         });
+        $this->channels[$channel] = true;
+        $this->finished = true;
     }
 
-    public function unsubscribe(string $channel): void {}
+    public function unsubscribe(string $channel): void
+    {
+        unset($this->channels[$channel]);
+    }
 
     public function close(): void {}
 }
@@ -537,6 +665,14 @@ final class SharedCarrier implements Carrier
 {
     /** @var array<string, \Closure(string, string): void> */
     private array $receivers = [];
+
+    /**
+     * @return list<string>
+     */
+    public function channels(): array
+    {
+        return array_keys($this->receivers);
+    }
 
     public function publish(array $channels, string $message): void
     {

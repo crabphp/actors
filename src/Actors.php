@@ -83,6 +83,7 @@ final class Actors implements ActorsContract
     private array $draining = [];
 
     private ?Task $subscribing = null;
+    private readonly Cancellation $stopped;
     private bool $stopping = false;
 
     /**
@@ -99,6 +100,7 @@ final class Actors implements ActorsContract
         private readonly int $maxInbox = 1000,
         private readonly ?LoggerInterface $logger = null,
     ) {
+        $this->stopped = new Cancellation();
         if ($workers < 1 || $idle <= 0 || $maxInbox < 1) {
             throw new \InvalidArgumentException(
                 'Actors need at least one worker, an idle time and room for a message.',
@@ -109,6 +111,10 @@ final class Actors implements ActorsContract
     public function tell(string $actor, string $key, mixed $message): void
     {
         $this->check($actor, $key);
+        if ($this->stopping) {
+            $this->report('warning', "{$actor} for \"{$key}\" was dropped because the process is stopping.");
+            return;
+        }
         $data = self::plain($message);
         if (!$this->remote($actor, $key)) {
             $this->local($actor, $key, $data, null);
@@ -135,6 +141,10 @@ final class Actors implements ActorsContract
         if (!is_finite($timeout) || $timeout < 0) {
             throw new \InvalidArgumentException('An actor ask needs a finite, nonnegative timeout.');
         }
+        if ($this->stopping) {
+            $this->report('warning', "{$actor} for \"{$key}\" was refused because the process is stopping.");
+            throw new NoReply("{$actor} for \"{$key}\" was refused because the process is stopping.");
+        }
         $data = self::plain($message);
         $loop = EventLoop::current();
         // One deadline for all of it: waiting for the reply channel counts against the timeout too.
@@ -156,6 +166,9 @@ final class Actors implements ActorsContract
                         "{$actor} for \"{$key}\" did not reply within {$timeout} seconds: the reply channel was not ready.",
                     ),
                 );
+                if ($this->stopping) {
+                    throw new NoReply("{$actor} for \"{$key}\" was refused because the process is stopping.");
+                }
                 $timeout = max(0.0, $deadline - self::now());
             }
             // Settled once, by the reply, the timeout or the cancellation; a reply may come while it is still being sent.
@@ -281,9 +294,39 @@ final class Actors implements ActorsContract
      */
     public function stop(): void
     {
+        if ($this->stopping) {
+            return;
+        }
         $this->stopping = true;
-        foreach ($this->boxes as $box) {
+        $this->stopped->cancel(new NoReply('the process it runs in is stopping.'));
+        foreach ($this->boxes as $name => $box) {
+            $count = $box->size();
+            if ($count > 0) {
+                [$actor, $key] = explode("\0", $name, 2);
+                $this->report(
+                    'warning',
+                    "{$actor} for \"{$key}\" dropped {$count} waiting messages because the process is stopping.",
+                );
+            }
             $box->end('stopping');
+        }
+        foreach (array_values($this->waiting) as $answer) {
+            $answer(false, 'the process it runs in is stopping.');
+        }
+        foreach ($this->outbox as $outgoings) {
+            foreach ($outgoings as $outgoing) {
+                if ($outgoing->published || $outgoing->withdrawn) {
+                    continue;
+                }
+                $outgoing->withdrawn = true;
+                ($outgoing->done)(new NoReply('the process it runs in is stopping.'));
+            }
+        }
+        $this->outbox = [];
+        if ($this->replies !== null) {
+            $channel = $this->replies;
+            $this->replies = null;
+            $this->carrier?->unsubscribe($channel);
         }
     }
 
@@ -301,6 +344,7 @@ final class Actors implements ActorsContract
     private function deliver(string $actor, string $key, mixed $data, ?\Closure $answer): void
     {
         if ($this->stopping) {
+            $this->report('warning', "{$actor} for \"{$key}\" was dropped because the process is stopping.");
             $answer?->__invoke(false, 'the process it runs in is stopping.');
             return;
         }
@@ -465,9 +509,6 @@ final class Actors implements ActorsContract
     }
 
     /**
-     * Subscribes to this process's replies, once.
-     */
-    /**
      * Subscribes to this process's reply channel, once, for every ask. A
      * caller waits for it no longer than its own timeout, and its
      * cancellation ends only its own wait: the others still share it.
@@ -491,10 +532,15 @@ final class Actors implements ActorsContract
                         'Replies from actors may have been lost while the connection was down.',
                     ),
                 );
+                if ($this->stopping) {
+                    $this->carrier?->unsubscribe($channel);
+                    return;
+                }
                 $this->replies = $channel;
             });
         $wait = new Cancellation();
         $unsubscribe = $cancellation?->subscribe($wait->cancel(...));
+        $unsubscribeStopped = $this->stopped->subscribe($wait->cancel(...));
         $timer = $loop->delay($timeout, static fn() => $wait->cancel($late()));
         try {
             $task->await($wait);
@@ -504,6 +550,7 @@ final class Actors implements ActorsContract
         } finally {
             $loop->cancel($timer);
             $unsubscribe?->__invoke();
+            $unsubscribeStopped();
             if ($this->subscribing === $task && $task->isComplete()) {
                 $this->subscribing = null;
             }
@@ -621,6 +668,7 @@ final class Actors implements ActorsContract
             FailureReporter::report(strtoupper($level) . ' ' . $message, $error);
         }
     }
+
     private static function now(): float
     {
         return hrtime(true) / 1_000_000_000;
