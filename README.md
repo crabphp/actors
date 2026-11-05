@@ -85,7 +85,7 @@ An actor may keep a message and reply to it later, after other messages, while i
 
 ### When an actor ends
 
-- **When its inbox has been empty for `actors.idle` seconds,** 60 by default, iterating it ends, and so does the actor when `handle()` returns. Its memory goes with it: the next message starts it again from the beginning. Keep what must last longer in the database.
+- **When its inbox has been empty for `actors.idle` seconds,** 60 by default, iterating it ends, and so does the actor when `handle()` returns. Its memory goes with it: the next message starts it again from the beginning, once the previous `handle()` has returned. Messages arriving during cleanup wait for that next run. Keep what must last longer in the database.
 - **When `handle()` returns or throws,** the asks it took and did not reply to are refused, and a failure is logged as an error. The messages it had not taken yet are given to its next run, which starts at once.
 - **When its process stops,** its inbox ends and `$inbox->cancellation()` is cancelled. Pass that cancellation to what the actor waits on, so that a stop does not wait for it. Messages not yet taken are dropped.
 

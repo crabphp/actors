@@ -36,14 +36,10 @@ final class Mailbox implements Inbox
     private int $taken = 0;
     private Cancellation $cancellation;
 
-    /**
-     * @param \Closure(): void $onEnd Called once, when it ends.
-     */
     public function __construct(
         private readonly string $key,
         private readonly EventLoop $loop,
         private readonly float $idle,
-        private readonly \Closure $onEnd,
     ) {
         $this->queue = new \SplQueue();
         $this->cancellation = new Cancellation();
@@ -139,7 +135,6 @@ final class Mailbox implements Inbox
             return;
         }
         $this->ended = true;
-        ($this->onEnd)();
         $this->wake();
     }
 

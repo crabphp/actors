@@ -319,12 +319,7 @@ final class Actors implements ActorsContract
     private function start(string $actor, string $key): Mailbox
     {
         $name = $actor . "\0" . $key;
-        $box = null;
-        $box = new Mailbox($key, EventLoop::current(), $this->idle, function () use ($name, &$box): void {
-            if (($this->boxes[$name] ?? null) === $box) {
-                unset($this->boxes[$name]);
-            }
-        });
+        $box = new Mailbox($key, EventLoop::current(), $this->idle);
         $this->boxes[$name] = $box;
         $task = Task::spawn(EventLoop::current(), fn() => $this->run($actor, $key, $box));
         $this->running[spl_object_id($task)] = $task;
@@ -351,6 +346,9 @@ final class Actors implements ActorsContract
             $box->end();
             $box->refuseOpen($why);
             $left = $box->left();
+            // Keep the key until handle() and its refusals have finished. Messages arriving
+            // while either waits join this inbox, ahead of those sent to the next run.
+            unset($this->boxes[$actor . "\0" . $key]);
             // Messages it never took go to its next run, unless it took none, which would only fail again.
             $again = !$this->stopping && $box->taken() > 0;
             foreach ($left as [$data, $answer]) {
