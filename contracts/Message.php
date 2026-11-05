@@ -34,14 +34,17 @@ final class Message
      */
     public function reply(mixed $value = null): void
     {
+        // A tell() has no reply channel. Keep the documented no-op semantics
+        // and, in particular, do not reject a value that would not be JSON.
+        if ($this->answer === null) {
+            return;
+        }
         if ($this->replied) {
             throw new \LogicException('This message has already been replied to.');
         }
         $value = json_decode(json_encode($value, JSON_THROW_ON_ERROR | JSON_PRESERVE_ZERO_FRACTION), true);
         $this->replied = true;
-        if ($this->answer !== null) {
-            ($this->answer)(true, $value);
-        }
+        ($this->answer)(true, $value);
     }
 
     /**
