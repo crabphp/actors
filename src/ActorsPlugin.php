@@ -31,11 +31,6 @@ use Psr\Log\LoggerInterface;
  */
 final class ActorsPlugin implements WorkerPlugin
 {
-    /**
-     * The actors of this process, once anything has sent to one.
-     */
-    private ?Actors $made = null;
-
     public function register(Container $container): void
     {
         $container->get(Config::class)->defaults(
@@ -51,11 +46,12 @@ final class ActorsPlugin implements WorkerPlugin
                 'max_inbox' => ['type' => 'integer', 'minimum' => 1],
             ],
         );
-        $container->singleton(Actors::class, function (Container $container): Actors {
+        $container->instance(Lifecycle::class, new Lifecycle());
+        $container->singleton(ActorsContract::class, static function (Container $container): Actors {
             $config = $container->get(Config::class);
             $config->check('actors');
             $carrier = $container->has(Carrier::class) ? $container->get(Carrier::class) : null;
-            return $this->made = new Actors(
+            $actors = new Actors(
                 $container,
                 $carrier instanceof LocalCarrier ? null : $carrier,
                 (int) $config->get('actors.workers'),
@@ -63,8 +59,10 @@ final class ActorsPlugin implements WorkerPlugin
                 (int) $config->get('actors.max_inbox'),
                 $container->has(LoggerInterface::class) ? $container->get(LoggerInterface::class) : null,
             );
+            $container->get(Lifecycle::class)->actors = $actors;
+            return $actors;
         });
-        $container->singleton(ActorsContract::class, Actors::class);
+        $container->singleton(Actors::class, ActorsContract::class);
         if ($container->has(Servers::class)) {
             // Listed in app.php, with a carrier between processes, the actors run in workers of their own, beside HTTP.
             $container->get(Servers::class)->add(
@@ -99,7 +97,7 @@ final class ActorsPlugin implements WorkerPlugin
     public function stop(Worker $worker, Container $container): void
     {
         // Only where actors were sent to: the inboxes end, and the actors' waits are cancelled.
-        $this->made?->stop();
+        $container->get(Lifecycle::class)->actors?->stop();
     }
 
     /**

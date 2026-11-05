@@ -4,6 +4,7 @@ Crab Actors follows [semantic versioning](https://semver.org). Before 1.0, a min
 
 ## Unreleased
 
+- **A plugin stops its own container:** reusing an `ActorsPlugin` object no longer stops another application's actors. The concrete service name now follows a replacement bound under its contract.
 - **One actor keeps its key until it returns:** an idle inbox no longer starts a second `handle()` while the first is still finishing. Messages arriving during cleanup wait in order for the next run.
 - **Invalid sends fail before they start work:** an actor must have a public `handle()` taking the inbox and a string key. An ask refuses a negative or non-finite timeout before creating a wait or subscription.
 - **Replying to a tell does nothing:** `Message::reply()` no longer serializes a reply nobody is waiting for or rejects a second call for a message sent with `tell()`.
