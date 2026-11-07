@@ -2,7 +2,7 @@
 
 Crab Actors follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
-## Unreleased
+## 0.1.1 — 2026-11-07
 
 - **Examples follow framework 0.6:** register broadcast and actors with `withPlugins()`, and application bindings with `withSetup()`. The guide explains process-local memory, ordered publication, one shared actors server and separate HTTP deployment; its application and chat examples run in the tests.
 - **Stopping releases pending sends and reply subscriptions:** asks waiting for a reply channel or a remote reply are refused on shutdown. Unpublished sends are withdrawn, and a reply subscription that finishes after shutdown is left too.
