@@ -1,6 +1,6 @@
 # Crab Actors
 
-Actors for the [Crab framework](https://github.com/crabphp/framework): one for each key, taking its messages one at a time and keeping its memory while it runs. They became a separate package in framework 0.6.0 and keep their classes, plugin, command and settings. This package requires PHP 8.4 and framework 0.6.x.
+Actors for the [Crab framework](https://github.com/crabphp/framework): one for each key, taking its messages one at a time and keeping its memory while it runs. They became a separate package in framework 0.6.0 and keep their classes, plugin, command and settings. This package requires PHP 8.4 and framework 0.7.x.
 
 - [Introduction](#introduction)
 - [Installation](#installation)

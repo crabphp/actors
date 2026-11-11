@@ -2,6 +2,10 @@
 
 Crab Actors follows [semantic versioning](https://semver.org). Before 1.0, a minor version may break what an application writes; the entry says what to change.
 
+## 0.2.0 — 2026-11-12
+
+- Requires `crabphp/framework` ^0.7, for its 0.7.0 release.
+
 ## 0.1.1 — 2026-11-07
 
 - **Examples follow framework 0.6:** register broadcast and actors with `withPlugins()`, and application bindings with `withSetup()`. The guide explains process-local memory, ordered publication, one shared actors server and separate HTTP deployment; its application and chat examples run in the tests.
